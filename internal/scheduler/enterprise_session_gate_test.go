@@ -39,11 +39,13 @@ func sessionTestScheduler(t *testing.T, switched bool) (*Scheduler, *recorderUps
 }
 
 // TestEnterpriseSessionGateSkipsBehaviorTasks 企业切换会话的行为类任务门控：
-// /v2/report 等行为事件对该形态返回 200 却被上游静默丢弃（实测 2026-10-12，
-// 15 个成长任务全部 0/x 且 90s 内进度从不跳动），执行即零收益白跑——
-// 活跃上报 / 连登管家 / 猫猫旅行 / 夜猫子必须一个上游调用都不发；
-// 签到不在此列（对该形态未观测到静默失败，且失败是显式报错）。
-// 每个子用例配个人号对照，证明"没发请求"是门控生效而非构造有误。
+//
+// 2026-10-26 更正：企业切换会话（token_source=enterprise_switch 且 enterpriseId 为空）
+// 的【个人账号】**不再门控**。实测其桌面指纹上报通道可正常点亮成长任务
+// （RichMeow_Chat 100 分 + first_buddy 300 分实际到账），被丢弃的只是 CLI 单事件通道。
+// 因此本用例改为：行为类任务对该形态**照常发起**（活跃上报走桌面序列）。
+// 真正的企业版（enterpriseId 有值）仍由 TestEnterpriseGateSkipsGrowthTasks 覆盖。
+// 每个子用例配个人号对照，证明行为一致。			
 func TestEnterpriseSessionGateSkipsBehaviorTasks(t *testing.T) {
 	// 与 TestEnterpriseGateSkipsGrowthTasks 同款：把夜猫子窗口钉在窗口内。
 	restoreClock := nowForNightWindow
@@ -59,10 +61,10 @@ func TestEnterpriseSessionGateSkipsBehaviorTasks(t *testing.T) {
 		gated bool
 	}{
 		{"签到", func(s *Scheduler) { s.RunCheckinNow() }, "/daily-checkin", false},
-		{"活跃上报", func(s *Scheduler) { s.RunActivityNow() }, "/v2/report", true},
-		{"猫猫旅行", func(s *Scheduler) { s.RunTravelNow() }, "/activity/growth/buddy/info", true},
-		{"夜猫子", func(s *Scheduler) { s.RunBlackcatNow() }, "/v2/activity/growth/tasks", true},
-		{"连登管家", func(s *Scheduler) { s.RunStreakBonusNow() }, "/activity/growth/streak", true},
+		{"活跃上报", func(s *Scheduler) { s.RunActivityNow() }, "/v2/report", false},
+		{"猫猫旅行", func(s *Scheduler) { s.RunTravelNow() }, "/activity/growth/buddy/info", false},
+		{"夜猫子", func(s *Scheduler) { s.RunBlackcatNow() }, "/v2/activity/growth/tasks", false},
+		{"连登管家", func(s *Scheduler) { s.RunStreakBonusNow() }, "/activity/growth/streak", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -546,13 +546,11 @@ func (s *Scheduler) runActivity(ctx context.Context) {
 		if a == nil || a.AccessTokenValue() == "" {
 			continue
 		}
-		// 企业版跳过活跃上报：/v2/report 本身返回 200（不报错），但它唯一的作用是
-		// 点亮 growth 连登天数 / 解锁 first_buddy 领养——这两者对企业号都是 403
-		// （「growth system is only available for personal users」），即**零收益**。
-		// 该类"静默无效"最易被忽略（日志无异常），故显式跳过，不给上游多发一次请求。
-		// 企业切换会话（token_source=enterprise_switch）同跳：report 返回 200 却被
-		// 上游静默丢弃（连登不涨），同样是零收益（见 auth.IsEnterpriseSession）。
-		if a.IsEnterpriseSession() {
+		// 真实企业版（IsEnterprise：enterpriseId 有值）无个人成长体系，跳过。
+		// 注意区分：token_source=enterprise_switch 但 enterpriseId 为空的【个人账号】
+		// 不属于此列 —— 2026-10-26 实测其桌面指纹通道可正常点亮成长任务
+		// （RichMeow_Chat 100 分 + first_buddy 300 分实际到账），故不再跳过。
+		if a.IsEnterprise() {
 			continue
 		}
 		// global 账号同样上报（PR #45 实测国际版 /v2/report 在 workbuddy.ai 上 code=0 OK，
@@ -567,8 +565,18 @@ func (s *Scheduler) runActivity(ctx context.Context) {
 		}
 		first = false
 		cid := fmt.Sprintf("wb2api-%d", time.Now().UnixMilli())
-		if err := s.cfg.Upstream.ReportChatActivity(a, cid, ""); err != nil {
-			log.Printf("activity %s: %v", logfmt.Label(a.UID, a.Nickname), err)
+		var reportErr error
+		if a.IsEnterpriseSession() {
+			// 企业切换会话：CLI 单事件通道会被上游静默丢弃（返回 200 但进度不动），
+			// 改走桌面客户端指纹的完整对话事件链，实测可点亮成长任务（2026-10-26）。
+			evs := upstream.DesktopChatSequence(
+				cid, cid+"-req", cid+"-msg", "deepseek-v4-flash", "DeepSeek V4 Flash")
+			reportErr = s.cfg.Upstream.ReportDesktopEvent(a, evs...)
+		} else {
+			reportErr = s.cfg.Upstream.ReportChatActivity(a, cid, "")
+		}
+		if reportErr != nil {
+			log.Printf("activity %s: %v", logfmt.Label(a.UID, a.Nickname), reportErr)
 			continue
 		}
 		s.checkActivityStreak(a) // 上报成功 → 回读 streak 自检
